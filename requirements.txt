@@ -6,4 +6,3 @@ typing-extensions==4.12.2
 requests==2.31.0
 beautifulsoup4==4.12.2
 googletrans==4.0.0rc1
-lxml==4.9.3
