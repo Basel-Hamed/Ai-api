@@ -1,20 +1,14 @@
-# main.py
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 import uvicorn
 import os
 from datetime import datetime
-
-# নিজস্ব মডিউল ইম্পোর্ট
-from config.websites import (
-    get_allowed_websites, 
-    is_website_allowed, 
-    get_website_info,
-    get_websites_by_category
-)
-from utils.scraper import fetch_headlines, fetch_articles, search_website
-from utils.translator import translate_text, translate_batch
+import requests
+from bs4 import BeautifulSoup
+from googletrans import Translator
+import json
+from pathlib import Path
 
 app = FastAPI(
     title="প্রাইভেট ওয়েবসাইট API",
@@ -31,17 +25,174 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# অনুবাদক
+translator = Translator()
+
+# ================== কনফিগারেশন ==================
+
+ALLOWED_WEBSITES = {
+    "bbc": {
+        "name": "BBC News",
+        "url": "https://www.bbc.com/news",
+        "category": "news",
+        "language": "en"
+    },
+    "cnn": {
+        "name": "CNN",
+        "url": "https://www.cnn.com",
+        "category": "news",
+        "language": "en"
+    },
+    "techcrunch": {
+        "name": "TechCrunch",
+        "url": "https://techcrunch.com",
+        "category": "technology",
+        "language": "en"
+    },
+    "theverge": {
+        "name": "The Verge",
+        "url": "https://www.theverge.com",
+        "category": "technology",
+        "language": "en"
+    },
+    "espn": {
+        "name": "ESPN",
+        "url": "https://www.espn.com",
+        "category": "sports",
+        "language": "en"
+    },
+    "ndtv": {
+        "name": "NDTV",
+        "url": "https://www.ndtv.com",
+        "category": "news",
+        "language": "en"
+    },
+    "reuters": {
+        "name": "Reuters",
+        "url": "https://www.reuters.com",
+        "category": "news",
+        "language": "en"
+    },
+    "apnews": {
+        "name": "AP News",
+        "url": "https://apnews.com",
+        "category": "news",
+        "language": "en"
+    }
+}
+
+# ================== ইউটিলিটি ফাংশন ==================
+
+def fetch_headlines(url: str, limit: int = 5):
+    """একটি ওয়েবসাইট থেকে হেডলাইন স্ক্র্যাপ করে"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        headlines = []
+        
+        # কমন হেডলাইন সিলেক্টর
+        selectors = ['h1', 'h2', 'h3', '.headline', '.title', '.article-title']
+        
+        for selector in selectors:
+            elements = soup.select(selector)
+            for elem in elements[:limit]:
+                text = elem.get_text().strip()
+                if text and len(text) > 20 and text not in headlines:
+                    headlines.append(text)
+                    if len(headlines) >= limit:
+                        break
+            if len(headlines) >= limit:
+                break
+        
+        return headlines[:limit]
+    except Exception as e:
+        return [f"Error: {str(e)}"]
+
+def fetch_articles(url: str, limit: int = 3):
+    """একটি ওয়েবসাইট থেকে আর্টিকেল লিংক স্ক্র্যাপ করে"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        articles = []
+        
+        # লিংক খোঁজা
+        for link in soup.find_all('a', href=True)[:limit*3]:
+            href = link['href']
+            text = link.get_text().strip()
+            
+            if text and len(text) > 15 and href.startswith('http'):
+                articles.append({
+                    "title": text,
+                    "url": href
+                })
+                if len(articles) >= limit:
+                    break
+        
+        return articles[:limit]
+    except Exception as e:
+        return []
+
+def search_website(url: str, keyword: str):
+    """একটি ওয়েবসাইটে কীওয়ার্ড সার্চ করে"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        results = []
+        text_content = soup.get_text()
+        
+        if keyword.lower() in text_content.lower():
+            # কনটেক্সট খোঁজা
+            sentences = text_content.split('.')
+            for sentence in sentences:
+                if keyword.lower() in sentence.lower():
+                    results.append(sentence.strip())
+                    if len(results) >= 5:
+                        break
+        
+        return results[:5]
+    except Exception as e:
+        return []
+
+def translate_text(text: str, dest: str = "bn"):
+    """টেক্সট বাংলায় অনুবাদ করে"""
+    try:
+        result = translator.translate(text, dest=dest)
+        return result.text
+    except:
+        return text
+
+def translate_batch(texts: list, dest: str = "bn"):
+    """একাধিক টেক্সট অনুবাদ করে"""
+    results = []
+    for text in texts:
+        try:
+            translated = translate_text(text, dest)
+            results.append(translated)
+        except:
+            results.append(text)
+    return results
+
 # ================== API এন্ডপয়েন্ট ==================
 
 @app.get("/")
 async def root():
-    """হোম পেজ - অনুমোদিত সাইটের সংখ্যা দেখায়"""
-    sites = get_allowed_websites()
+    sites = ALLOWED_WEBSITES
     return {
         "name": "🔒 প্রাইভেট ওয়েবসাইট API",
         "description": "শুধুমাত্র আপনার কনফিগার করা সাইট থেকে তথ্য আনে",
         "total_sites": len(sites),
-        "message": "নিচের এন্ডপয়েন্ট ব্যবহার করে তথ্য নিন",
         "endpoints": {
             "সাইট লিস্ট": "/sites",
             "সাইট অনুযায়ী": "/sites/{site_name}",
@@ -53,16 +204,16 @@ async def root():
     }
 
 @app.get("/sites")
-async def list_sites(
-    category: Optional[str] = Query(None, description="ক্যাটাগরি ফিল্টার")
-):
-    """অনুমোদিত সব ওয়েবসাইটের তালিকা দেখায়"""
-    if category:
-        sites = get_websites_by_category(category)
-    else:
-        sites = get_allowed_websites()
+async def list_sites(category: Optional[str] = None):
+    sites = ALLOWED_WEBSITES
     
-    # শুধু প্রয়োজনীয় তথ্য দেখায়
+    if category:
+        filtered = {}
+        for name, info in sites.items():
+            if info["category"] == category:
+                filtered[name] = info
+        sites = filtered
+    
     simplified = {}
     for name, info in sites.items():
         simplified[name] = {
@@ -73,46 +224,31 @@ async def list_sites(
     
     return {
         "total": len(simplified),
-        "categories": list(set(info["category"] for info in sites.values())),
+        "categories": list(set(info["category"] for info in ALLOWED_WEBSITES.values())),
         "sites": simplified
     }
 
 @app.get("/sites/{site_name}")
 async def site_info(site_name: str):
-    """একটি নির্দিষ্ট সাইটের তথ্য দেখায়"""
-    if not is_website_allowed(site_name):
-        raise HTTPException(
-            status_code=403,
-            detail=f"❌ '{site_name}' অনুমোদিত নয়। শুধু কনফিগার করা সাইট থেকে তথ্য নেওয়া যাবে"
-        )
+    if site_name not in ALLOWED_WEBSITES:
+        raise HTTPException(status_code=403, detail=f"'{site_name}' অনুমোদিত নয়")
     
-    info = get_website_info(site_name)
+    info = ALLOWED_WEBSITES[site_name]
     return {
         "name": site_name,
-        "info": {
-            "name": info.get("name"),
-            "url": info.get("url"),
-            "category": info.get("category"),
-            "language": info.get("language")
-        }
+        "info": info
     }
 
 @app.get("/headlines/{site_name}")
 async def get_headlines(
     site_name: str,
     limit: int = Query(5, ge=1, le=10),
-    translate: bool = Query(True, description="বাংলায় অনুবাদ করবে?")
+    translate: bool = Query(True)
 ):
-    """একটি সাইট থেকে হেডলাইন আনে"""
+    if site_name not in ALLOWED_WEBSITES:
+        raise HTTPException(status_code=403, detail=f"'{site_name}' অনুমোদিত নয়")
     
-    # চেক করে যে সাইটটি অনুমোদিত কিনা
-    if not is_website_allowed(site_name):
-        raise HTTPException(
-            status_code=403,
-            detail=f"❌ '{site_name}' অনুমোদিত নয়। শুধু কনফিগার করা সাইট থেকে তথ্য নেওয়া যাবে"
-        )
-    
-    info = get_website_info(site_name)
+    info = ALLOWED_WEBSITES[site_name]
     
     try:
         headlines = fetch_headlines(info["url"], limit)
@@ -131,7 +267,6 @@ async def get_headlines(
             result["bangla"] = bangla
         
         return result
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ডাটা আনা যায়নি: {str(e)}")
 
@@ -141,15 +276,10 @@ async def get_articles(
     limit: int = Query(3, ge=1, le=5),
     translate_titles: bool = Query(True)
 ):
-    """একটি সাইট থেকে আর্টিকেলের লিংক আনে"""
+    if site_name not in ALLOWED_WEBSITES:
+        raise HTTPException(status_code=403, detail=f"'{site_name}' অনুমোদিত নয়")
     
-    if not is_website_allowed(site_name):
-        raise HTTPException(
-            status_code=403,
-            detail=f"❌ '{site_name}' অনুমোদিত নয়"
-        )
-    
-    info = get_website_info(site_name)
+    info = ALLOWED_WEBSITES[site_name]
     
     try:
         articles = fetch_articles(info["url"], limit)
@@ -169,7 +299,6 @@ async def get_articles(
                 article["bangla_title"] = bangla_titles[i]
         
         return result
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -179,15 +308,10 @@ async def search_site(
     q: str = Query(..., description="কী খুঁজবেন?"),
     translate_results: bool = Query(True)
 ):
-    """একটি সাইটে কীওয়ার্ড সার্চ করে"""
+    if site_name not in ALLOWED_WEBSITES:
+        raise HTTPException(status_code=403, detail=f"'{site_name}' অনুমোদিত নয়")
     
-    if not is_website_allowed(site_name):
-        raise HTTPException(
-            status_code=403,
-            detail=f"❌ '{site_name}' অনুমোদিত নয়"
-        )
-    
-    info = get_website_info(site_name)
+    info = ALLOWED_WEBSITES[site_name]
     
     try:
         results = search_website(info["url"], q)
@@ -204,32 +328,21 @@ async def search_site(
             response["bangla"] = bangla
         
         return response
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/translate")
-async def translate(
-    text: str = Query(..., description="যে টেক্সট অনুবাদ করতে চান"),
-    dest: str = Query("bn", description="টার্গেট ভাষা")
-):
-    """টেক্সট বাংলায় অনুবাদ করে"""
+async def translate(text: str = Query(...), dest: str = "bn"):
     try:
         translated = translate_text(text, dest)
-        return {
-            "original": text,
-            "translated": translated
-        }
+        return {"original": text, "translated": translated}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/categories")
 async def list_categories():
-    """ক্যাটাগরি অনুযায়ী সাইটের তালিকা"""
-    sites = get_allowed_websites()
     categories = {}
-    
-    for name, info in sites.items():
+    for name, info in ALLOWED_WEBSITES.items():
         cat = info["category"]
         if cat not in categories:
             categories[cat] = []
@@ -237,44 +350,22 @@ async def list_categories():
             "name": name,
             "title": info["name"]
         })
-    
     return categories
 
-@app.get("/help")
-async def help_page():
-    """ব্যবহার বিধি"""
-    sites = get_allowed_websites()
-    
-    return {
-        "title": "📘 API ব্যবহার করার নিয়ম",
-        "important": "⚠️ এই API শুধু কনফিগার করা সাইট থেকে তথ্য দেয়",
-        "available_sites": [f"{name} ({info['name']})" for name, info in sites.items()],
-        "how_to_use": {
-            "সাইট লিস্ট দেখুন": "/sites",
-            "হেডলাইন দেখুন": "/headlines/bbc?limit=5&translate=true",
-            "আর্টিকেল দেখুন": "/articles/techcrunch?limit=3",
-            "সার্চ করুন": "/search/bbc?q=bangladesh",
-            "অনুবাদ করুন": "/translate?text=Hello"
-        },
-        "note": "🔧 নতুন সাইট যোগ করতে config/websites.py এডিট করুন"
-    }
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-# Render-এর জন্য পরিবর্তিত অংশ
 if __name__ == "__main__":
-    try:
-        sites = get_allowed_websites()
-        print("\n" + "="*50)
-        print("🔒 প্রাইভেট ওয়েবসাইট API চালু হচ্ছে...")
-        print(f"📊 অনুমোদিত সাইট: {len(sites)} টি")
-        for name, info in sites.items():
-            print(f"   ✓ {name}: {info['name']}")
-        print("="*50)
-        
-        # Render-এ পোর্ট ডায়নামিকভাবে সেট করা
-        port = int(os.getenv("PORT", 8000))
-        print(f"📍 পোর্ট: {port}")
-        print("="*50 + "\n")
-        
-        uvicorn.run(app, host="0.0.0.0", port=port)
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    print("\n" + "="*50)
+    print("🔒 প্রাইভেট ওয়েবসাইট API চালু হচ্ছে...")
+    print(f"📊 অনুমোদিত সাইট: {len(ALLOWED_WEBSITES)} টি")
+    for name, info in ALLOWED_WEBSITES.items():
+        print(f"   ✓ {name}: {info['name']} ({info['category']})")
+    print("="*50)
+    
+    port = int(os.getenv("PORT", 8000))
+    print(f"📍 পোর্ট: {port}")
+    print("="*50 + "\n")
+    
+    uvicorn.run(app, host="0.0.0.0", port=port)
