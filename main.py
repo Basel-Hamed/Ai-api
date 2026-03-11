@@ -7,27 +7,6 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 from googletrans import Translator
-from pydantic import BaseModel
-
-# ================== Pydantic Models ==================
-class SiteInfo(BaseModel):
-    name: str
-    category: str
-    language: str
-
-class SiteListResponse(BaseModel):
-    total: int
-    categories: List[str]
-    sites: Dict[str, SiteInfo]
-
-class HeadlineResponse(BaseModel):
-    site: str
-    name: str
-    url: str
-    category: str
-    timestamp: str
-    headlines: List[str]
-    bangla: Optional[List[str]] = None
 
 # ================== FastAPI App ==================
 app = FastAPI(
@@ -36,7 +15,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS সেটআপ
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -45,56 +24,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# অনুবাদক
 translator = Translator()
 
-# ================== সাইবার সিকিউরিটি ওয়েবসাইট লিংক ==================
+# ================== সাইবার সিকিউরিটি সাইট ==================
 ALLOWED_WEBSITES = {
-    "kali": {
-        "name": "Kali Linux Official",
-        "url": "https://www.kali.org/blog/",
-        "category": "security",
-        "language": "en"
-    },
-    "hackthebox": {
-        "name": "Hack The Box Blog",
-        "url": "https://www.hackthebox.com/blog",
-        "category": "security",
-        "language": "en"
-    },
-    "tryhackme": {
-        "name": "TryHackMe Blog",
-        "url": "https://tryhackme.com/blog",
-        "category": "security",
-        "language": "en"
-    },
-    "cybrary": {
-        "name": "Cybrary Blog",
-        "url": "https://www.cybrary.it/blog/",
-        "category": "security",
-        "language": "en"
-    },
-    "securityweek": {
-        "name": "Security Week",
-        "url": "https://www.securityweek.com",
-        "category": "security",
-        "language": "en"
-    },
-    "darkreading": {
-        "name": "Dark Reading",
-        "url": "https://www.darkreading.com",
-        "category": "security",
-        "language": "en"
-    },
     "thehackernews": {
         "name": "The Hacker News",
         "url": "https://thehackernews.com",
         "category": "security",
         "language": "en"
     },
-    "infosecurity": {
-        "name": "Infosecurity Magazine",
-        "url": "https://www.infosecurity-magazine.com",
+    "kali": {
+        "name": "Kali Linux",
+        "url": "https://www.kali.org/blog/",
         "category": "security",
         "language": "en"
     },
@@ -104,15 +46,21 @@ ALLOWED_WEBSITES = {
         "category": "security",
         "language": "en"
     },
-    "sans": {
-        "name": "SANS Institute",
-        "url": "https://www.sans.org/blog/",
+    "darkreading": {
+        "name": "Dark Reading",
+        "url": "https://www.darkreading.com",
+        "category": "security",
+        "language": "en"
+    },
+    "securityweek": {
+        "name": "Security Week",
+        "url": "https://www.securityweek.com",
         "category": "security",
         "language": "en"
     }
 }
 
-# ================== ইউটিলিটি ফাংশন ==================
+# ================== Utility Functions ==================
 def fetch_headlines(url: str, limit: int = 5) -> List[str]:
     """Fetch headlines from a website"""
     try:
@@ -138,77 +86,54 @@ def fetch_headlines(url: str, limit: int = 5) -> List[str]:
     except Exception as e:
         return [f"Error: {str(e)}"]
 
-def translate_text(text: str, dest: str = "bn") -> str:
-    """Translate text to target language"""
-    try:
-        result = translator.translate(text, dest=dest)
-        return result.text
-    except Exception as e:
-        return text
-
 def translate_batch(texts: List[str], dest: str = "bn") -> List[str]:
     """Translate multiple texts"""
     results = []
     for text in texts:
         try:
-            translated = translate_text(text, dest)
-            results.append(translated)
+            result = translator.translate(text, dest=dest)
+            results.append(result.text)
         except:
             results.append(text)
     return results
 
-# ================== API এন্ডপয়েন্ট ==================
-@app.get("/", response_model=None)
+# ================== API Endpoints ==================
+@app.get("/")
 async def root():
     """হোম পেজ"""
     return {
         "name": "🛡️ সাইবার সিকিউরিটি API",
         "description": "শুধুমাত্র সাইবার সিকিউরিটি ওয়েবসাইট থেকে তথ্য আনে",
         "total_sites": len(ALLOWED_WEBSITES),
-        "message": "নিচের এন্ডপয়েন্ট ব্যবহার করে তথ্য নিন",
         "endpoints": {
             "সাইট লিস্ট": "/sites",
-            "সাইট অনুযায়ী": "/sites/{site_name}",
             "হেডলাইন": "/headlines/{site_name}",
             "অনুবাদ": "/translate?text=hello"
         }
     }
 
-@app.get("/sites", response_model=SiteListResponse)
+@app.get("/sites")
 async def list_sites():
     """সব সাইবার সিকিউরিটি সাইটের তালিকা"""
-    
     simplified = {}
     for name, info in ALLOWED_WEBSITES.items():
-        simplified[name] = SiteInfo(
-            name=info["name"],
-            category=info["category"],
-            language=info["language"]
-        )
+        simplified[name] = {
+            "name": info["name"],
+            "category": info["category"],
+            "language": info["language"]
+        }
     
-    return SiteListResponse(
-        total=len(simplified),
-        categories=["security"],
-        sites=simplified
-    )
-
-@app.get("/sites/{site_name}", response_model=None)
-async def site_info(site_name: str):
-    """একটি নির্দিষ্ট সাইটের তথ্য দেখায়"""
-    if site_name not in ALLOWED_WEBSITES:
-        raise HTTPException(status_code=403, detail=f"'{site_name}' অনুমোদিত নয়")
-    
-    info = ALLOWED_WEBSITES[site_name]
     return {
-        "name": site_name,
-        "info": info
+        "total": len(simplified),
+        "categories": ["security"],
+        "sites": simplified
     }
 
-@app.get("/headlines/{site_name}", response_model=HeadlineResponse)
+@app.get("/headlines/{site_name}")
 async def get_headlines(
     site_name: str,
     limit: int = Query(5, ge=1, le=10),
-    translate: bool = Query(True, description="বাংলায় অনুবাদ করবে?")
+    translate: bool = Query(True)
 ):
     """একটি সাইট থেকে হেডলাইন আনে"""
     
@@ -220,38 +145,38 @@ async def get_headlines(
     try:
         headlines = fetch_headlines(info["url"], limit)
         
-        result = HeadlineResponse(
-            site=site_name,
-            name=info["name"],
-            url=info["url"],
-            category=info["category"],
-            timestamp=datetime.now().isoformat(),
-            headlines=headlines
-        )
+        result = {
+            "site": site_name,
+            "name": info["name"],
+            "url": info["url"],
+            "category": info["category"],
+            "timestamp": datetime.now().isoformat(),
+            "headlines": headlines
+        }
         
         if translate and headlines:
-            result.bangla = translate_batch(headlines)
+            result["bangla"] = translate_batch(headlines)
         
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ডাটা আনা যায়নি: {str(e)}")
 
-@app.get("/translate", response_model=None)
+@app.get("/translate")
 async def translate(
     text: str = Query(..., description="যে টেক্সট অনুবাদ করতে চান"),
     dest: str = Query("bn", description="টার্গেট ভাষা")
 ):
     """টেক্সট বাংলায় অনুবাদ করে"""
     try:
-        translated = translate_text(text, dest)
+        result = translator.translate(text, dest=dest)
         return {
             "original": text,
-            "translated": translated
+            "translated": result.text
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/health", response_model=None)
+@app.get("/health")
 async def health_check():
     """হেলথ চেক"""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
